@@ -7,9 +7,18 @@ Generation cycle
 3. Fill the rest: tournament-select two parents, crossover with probability
    ``crossover_prob`` (else copy), mutate each child, evaluate.
 4. The new generation replaces the old one (generational replacement).
-5. Stop at ``max_generations`` or, if configured, after
+5. Stop at ``max_generations``, or when the optional ``max_evaluations``
+   fitness-evaluation budget is used up, or, if configured, after
    ``early_stopping_patience`` generations without best-so-far improving by
    more than ``min_improvement``.
+
+Evaluation budget (used for fair comparisons): only calls to the fitness
+evaluator count; constraint-feasibility checks inside the regeneration guard
+do not. When the budget runs out in the middle of a generation, the remaining
+population slots are filled with the best not-yet-copied parents of the
+previous generation (already evaluated, so they cost nothing); the run then
+stops with exactly ``max_evaluations`` evaluations. With ``max_evaluations=None``
+behaviour is unchanged.
 
 Constraint handling in reproduction (bounded regeneration, never assumed safe)
 -----------------------------------------------------------------------------
@@ -61,6 +70,7 @@ class GAResult:
     # best-so-far chromosome / evaluation at each generation (independent copies)
     best_so_far_chromosomes: List[Chromosome] = field(default_factory=list)
     best_so_far_evaluations: List[FitnessBreakdown] = field(default_factory=list)
+    cumulative_evaluations: List[int] = field(default_factory=list)  # evaluations used up to each generation
     initial_population_best: float = 0.0
     generations_run: int = 0
     stop_reason: str = ""
@@ -126,6 +136,7 @@ class GeneticAlgorithm:
             result.diversity.append(PopulationGenerator.diversity(population))
             result.best_so_far_chromosomes.append(best_chrom.copy())
             result.best_so_far_evaluations.append(best_eval)
+            result.cumulative_evaluations.append(n_evals)
             if gen == 0:
                 result.initial_population_best = float(fits.max())
             if progress:
@@ -134,6 +145,9 @@ class GeneticAlgorithm:
             # --- termination -------------------------------------------------------------
             if gen >= cfg.max_generations:
                 result.stop_reason = f"reached max_generations ({cfg.max_generations})"
+                break
+            if cfg.max_evaluations is not None and n_evals >= cfg.max_evaluations:
+                result.stop_reason = f"evaluation budget exhausted ({n_evals} evaluations)"
                 break
             if cfg.early_stopping_patience is not None and stale >= cfg.early_stopping_patience:
                 result.stop_reason = (f"early stopping: no improvement > {cfg.min_improvement:g} "
@@ -144,18 +158,26 @@ class GeneticAlgorithm:
             order = sorted(range(len(evals)), key=lambda i: selection_key(evals[i]), reverse=True)
             new_pop = [population[i].copy() for i in order[:cfg.elite_count]]
             new_evals = [evals[i] for i in order[:cfg.elite_count]]
+            budget = cfg.max_evaluations
             while len(new_pop) < cfg.population_size:
+                if budget is not None and n_evals >= budget:
+                    break
                 i = tournament_selection(evals, cfg.tournament_size, rng)
                 j = tournament_selection(evals, cfg.tournament_size, rng)
                 kids = self._crossover(population[i], population[j], evals[i], evals[j], rng) \
                     if rng.random() < cfg.crossover_prob else (population[i].copy(), population[j].copy())
                 for kid in kids:
-                    if len(new_pop) == cfg.population_size:
+                    if len(new_pop) == cfg.population_size or (budget is not None and n_evals >= budget):
                         break
                     kid = self._mutate(kid, rng)
                     new_pop.append(kid)
                     new_evals.append(self.evaluator.evaluate(kid))
                     n_evals += 1
+            for i in order[cfg.elite_count:]:  # budget ran out mid-generation: carry over evaluated parents
+                if len(new_pop) == cfg.population_size:
+                    break
+                new_pop.append(population[i].copy())
+                new_evals.append(evals[i])
             population, evals = new_pop, new_evals
             gen += 1
 

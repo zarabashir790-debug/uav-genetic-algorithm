@@ -117,7 +117,9 @@ def main() -> None:
         "fitness_config": asdict(fit_cfg), "stop_reason": result.stop_reason,
         "generations_run": result.generations_run, "evaluations": result.evaluations,
         "initial_best_fitness": initial.fitness, "final_best_fitness": final.fitness,
-        "final_feasible": recheck.feasible, "final_evaluation": {k: v for k, v in final.as_dict().items()
+        "final_feasible": recheck.feasible,
+        "initial_evaluation": {k: v for k, v in initial.as_dict().items() if k != "drones"},
+        "final_evaluation": {k: v for k, v in final.as_dict().items()
                                                                 if k != "drones"},
         "history": {"generation_best": result.generation_best, "generation_average": result.generation_average,
                     "best_so_far": result.best_so_far, "feasible_count": result.feasible_count,

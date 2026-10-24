@@ -28,3 +28,12 @@ outputs/*
 !outputs/grid_preview.png
 !outputs/*.png
 !outputs/ga_run_summary.json
+!outputs/experiments/
+!outputs/experiments/*
+
+# report build scratch
+reports/_report_build.html
+
+# report sources/outputs and report-build requirements (not pushed)
+reports/
+requirements-report.txt

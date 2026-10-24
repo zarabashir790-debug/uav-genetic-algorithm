@@ -183,3 +183,42 @@ def test_final_population_individuals_pass_validation_after_many_operations(grid
     for c in r.best_so_far_chromosomes:
         assert c.validate(grid, UAV) == []
     assert r.best_evaluation.feasible and r.best_evaluation.penalty == 0.0
+
+
+# ---- Step 5: evaluation budget (fair comparison) ----
+@pytest.mark.parametrize("pop", [20, 30, 50])
+def test_evaluation_budget_is_met_exactly(grid, pop):
+    r = GeneticAlgorithm(grid, config=GAConfig(population_size=pop, max_generations=10 ** 6,
+                                               max_evaluations=300, seed=3)).run()
+    assert r.evaluations == 300
+    assert r.cumulative_evaluations[-1] == 300 and "budget" in r.stop_reason
+    assert r.cumulative_evaluations == sorted(r.cumulative_evaluations)
+    assert r.cumulative_evaluations[0] == pop
+    assert r.best_chromosome.validate(grid, UAV) == []
+
+
+def test_budget_run_keeps_population_size_and_monotone_best(grid):
+    r = GeneticAlgorithm(grid, config=GAConfig(population_size=20, max_generations=10 ** 6,
+                                               max_evaluations=170, seed=2)).run()
+    assert all(b >= a for a, b in zip(r.best_so_far, r.best_so_far[1:]))
+    assert len(r.feasible_count) == r.generations_run + 1
+    assert all(f <= 20 for f in r.feasible_count)
+
+
+def test_budget_equal_to_default_run_matches_the_unbudgeted_run(grid):
+    a = GeneticAlgorithm(grid, config=GAConfig(population_size=10, max_generations=5, seed=4)).run()
+    b = GeneticAlgorithm(grid, config=GAConfig(population_size=10, max_generations=10 ** 6, seed=4,
+                                               max_evaluations=10 + 5 * 8)).run()
+    assert b.generation_best == a.generation_best and b.generations_run == a.generations_run
+
+
+def test_no_budget_means_unchanged_behaviour_and_cumulative_counts(grid):
+    r = run(grid)
+    assert r.config.max_evaluations is None
+    assert r.cumulative_evaluations == [10 + 8 * g for g in range(r.generations_run + 1)]
+
+
+def test_budget_validation():
+    with pytest.raises(ValueError):
+        GAConfig(population_size=30, max_evaluations=10)
+    assert GAConfig(max_evaluations=1710).max_evaluations == 1710

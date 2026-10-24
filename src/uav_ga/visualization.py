@@ -1,10 +1,14 @@
 """Plotting helpers.
 
-plot_grid (Step 2); plot_convergence, plot_routes, plot_route_snapshots, plot_coverage (Step 4).
+plot_grid (Step 2); plot_convergence, plot_routes, plot_route_snapshots, plot_coverage (Step 4);
+plot_sensitivity, plot_sensitivity_overview, plot_progress_comparison, plot_algorithm_comparison
+(Step 5 experiments).
 All plots are drawn from real data (grid layers, GAResult, FitnessEvaluator output).
 """
 
 from typing import List, Optional, Sequence, Tuple
+
+import warnings
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -218,5 +222,144 @@ def plot_coverage(grid: DisasterGrid, coverage_map: np.ndarray, chromosome, brea
                label="Drone base"),
     ], loc="upper left", bbox_to_anchor=(1.22, 1.0), fontsize=8)
     fig.tight_layout()
+    _save(fig, save_path)
+    return fig
+
+
+# ----------------------------------------------------------------------
+# Step 5 experiment plots (colours validated for colour-blind separation: blue = GA, orange = random search)
+# ----------------------------------------------------------------------
+GA_COLOR = "#2a78d6"
+RS_COLOR = "#eb6834"
+_INK, _MUTED = "#0b0b0b", "#52514e"
+
+
+def _clean_axes(ax) -> None:
+    for side in ("top", "right"):
+        ax.spines[side].set_visible(False)
+    for side in ("left", "bottom"):
+        ax.spines[side].set_color("#9a9a96")
+    ax.tick_params(colors=_MUTED)
+    ax.yaxis.grid(True, color="#e3e3e0", linewidth=0.8)
+    ax.set_axisbelow(True)
+    ax.xaxis.label.set_color(_MUTED)
+    ax.yaxis.label.set_color(_MUTED)
+
+
+def _mean_sd_points(ax, xs, groups, color, width=0.12, label=None):
+    """Mean +/- sample SD error bars with every seed's value as a small dot."""
+    rng = np.random.default_rng(0)  # fixed jitter so the figure is reproducible
+    for x, vals in zip(xs, groups):
+        vals = np.asarray(vals, dtype=float)
+        ax.scatter(x + rng.uniform(-width, width, len(vals)), vals, s=14, color=color, alpha=0.35,
+                   linewidths=0, zorder=2)
+    means = [np.mean(v) for v in groups]
+    sds = [np.std(v, ddof=1) if len(v) > 1 else 0.0 for v in groups]
+    ax.errorbar(xs, means, yerr=sds, fmt="o-", color=color, ecolor=color, elinewidth=2, capsize=5,
+                markersize=7, markeredgecolor="#fcfcfb", markeredgewidth=1.5, linewidth=1.5, zorder=3,
+                label=label)
+
+
+def plot_sensitivity(label: str, levels: Sequence, fitness: dict, diversity: dict, default_level,
+                     n_seeds: int, budget: int, save_path: Optional[str] = None):
+    """Final best fitness (left) and final population diversity (right) vs one hyperparameter.
+
+    ``fitness`` / ``diversity`` map each level to the list of per-seed values.
+    """
+    xs = list(range(len(levels)))
+    ticks = [f"{lv}\n(default)" if lv == default_level else f"{lv}" for lv in levels]
+    fig, axes = plt.subplots(1, 2, figsize=(10, 4.4))
+    for ax, data, ylab, title in ((axes[0], fitness, "Final best fitness", "Final best fitness"),
+                                  (axes[1], diversity, "Final population diversity (cells)",
+                                   "Final population diversity")):
+        _mean_sd_points(ax, xs, [data[lv] for lv in levels], GA_COLOR)
+        ax.set_xticks(xs)
+        ax.set_xticklabels(ticks)
+        ax.set_xlim(-0.5, len(levels) - 0.5)
+        ax.set_xlabel(label)
+        ax.set_ylabel(ylab)
+        ax.set_title(title, color=_INK, fontsize=11)
+        _clean_axes(ax)
+    fig.suptitle(f"Sensitivity to {label.lower()}  (mean ± SD over {n_seeds} seeds, dots = single seeds, "
+                 f"budget {budget} evaluations)", color=_INK, fontsize=10)
+    fig.tight_layout(rect=(0, 0, 1, 0.94))
+    _save(fig, save_path)
+    return fig
+
+
+def plot_progress_comparison(evals: Sequence[int], ga_curves, rs_curves, n_seeds: int,
+                             save_path: Optional[str] = None):
+    """Best-so-far fitness against fitness evaluations: mean ± SD band over seeds, GA vs random search."""
+    fig, ax = plt.subplots(figsize=(8.5, 5))
+    x = np.asarray(evals, dtype=float)
+    for curves, color, name in ((rs_curves, RS_COLOR, "Random search"), (ga_curves, GA_COLOR, "Genetic algorithm")):
+        arr = np.array([[np.nan if v is None else v for v in c] for c in curves], dtype=float)
+        with warnings.catch_warnings():  # early checkpoints can be all-NaN for the GA (no generation finished yet)
+            warnings.simplefilter("ignore", RuntimeWarning)
+            mu, sd = np.nanmean(arr, axis=0), np.nanstd(arr, axis=0, ddof=1)
+        ax.fill_between(x, mu - sd, mu + sd, color=color, alpha=0.18, linewidth=0)
+        ax.plot(x, mu, color=color, linewidth=2.2, label=name)
+        ax.annotate(name, (x[-1], mu[-1]), xytext=(6, 0), textcoords="offset points", va="center",
+                    color=_INK, fontsize=9)
+    ax.set_xlabel("Fitness evaluations")
+    ax.set_ylabel("Best-so-far fitness")
+    ax.set_title(f"GA vs random search: best-so-far fitness (mean ± SD, {n_seeds} seeds)", color=_INK,
+                 fontsize=11)
+    ax.set_xlim(x[0], x[-1] * 1.22)
+    ax.legend(loc="lower right", frameon=False)
+    _clean_axes(ax)
+    fig.tight_layout()
+    _save(fig, save_path)
+    return fig
+
+
+def plot_algorithm_comparison(ga_rows: List[dict], rs_rows: List[dict], save_path: Optional[str] = None):
+    """Final performance of GA vs random search on every objective (mean ± SD, dots = seeds)."""
+    panels = [("best_fitness", "Final best fitness", "higher is better"),
+              ("coverage", "Priority-weighted coverage", "higher is better"),
+              ("detection_rate", "Target detection rate", "higher is better"),
+              ("energy", "Energy (eu)", "lower is better"),
+              ("flight_time", "Flight time (tu)", "lower is better"),
+              ("hazard_exposure", "Hazard exposure", "lower is better")]
+    fig, axes = plt.subplots(2, 3, figsize=(11, 6.6))
+    for ax, (key, title, note) in zip(axes.ravel(), panels):
+        for x, rows, color in ((0, ga_rows, GA_COLOR), (1, rs_rows, RS_COLOR)):
+            vals = [r[key] for r in rows]
+            if key == "best_fitness":  # zoomed axis: coloured dots instead of bars that would start at 0
+                _mean_sd_points(ax, [x], [vals], color, width=0.1)
+                continue
+            ax.bar(x, np.mean(vals), width=0.5, color=color, alpha=0.85, zorder=1)
+            _mean_sd_points(ax, [x], [vals], "#222222", width=0.1)
+        ax.set_xticks([0, 1])
+        ax.set_xticklabels(["GA", "Random\nsearch"])
+        ax.set_xlim(-0.6, 1.6)
+        ax.set_title(f"{title}\n({note})", color=_INK, fontsize=9.5)
+        _clean_axes(ax)
+    fig.suptitle(f"Final performance after {int(ga_rows[0]['evaluations'])} fitness evaluations "
+                 f"(mean ± SD over {len(ga_rows)} seeds, dots = single seeds)", color=_INK, fontsize=10.5)
+    fig.tight_layout(rect=(0, 0, 1, 0.95))
+    _save(fig, save_path)
+    return fig
+
+
+def plot_sensitivity_overview(panels: Sequence[tuple], n_seeds: int, budget: int,
+                              save_path: Optional[str] = None):
+    """Compact 1x3 overview: final best fitness vs each hyperparameter on a shared y-axis.
+
+    ``panels`` = [(axis label, levels, {level: [per-seed fitness]}, default level), ...].
+    """
+    fig, axes = plt.subplots(1, len(panels), figsize=(10, 3.3), sharey=True)
+    for ax, (label, levels, fitness, default) in zip(np.atleast_1d(axes), panels):
+        xs = list(range(len(levels)))
+        _mean_sd_points(ax, xs, [fitness[lv] for lv in levels], GA_COLOR)
+        ax.set_xticks(xs)
+        ax.set_xticklabels([f"{lv}*" if lv == default else f"{lv}" for lv in levels])
+        ax.set_xlim(-0.5, len(levels) - 0.5)
+        ax.set_xlabel(label)
+        _clean_axes(ax)
+    np.atleast_1d(axes)[0].set_ylabel("Final best fitness")
+    fig.suptitle(f"Hyperparameter sensitivity: mean ± SD over {n_seeds} seeds, dots = single seeds, "
+                 f"{budget} evaluations per run (* = default)", color=_INK, fontsize=9.5)
+    fig.tight_layout(rect=(0, 0, 1, 0.92))
     _save(fig, save_path)
     return fig

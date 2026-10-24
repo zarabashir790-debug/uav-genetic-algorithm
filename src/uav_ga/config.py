@@ -102,6 +102,7 @@ class GAConfig:
     waypoint_replace_prob: float = 0.1  # chance a mutated waypoint is replaced by a random flyable cell
     speed_sigma_fraction: float = 0.15  # speed mutation std-dev as a fraction of (speed_max - speed_min)
     max_attempts: int = 10            # bounded regeneration attempts per crossover/mutation
+    max_evaluations: Optional[int] = None  # optional fitness-evaluation budget (None = unlimited)
 
     def __post_init__(self):
         if self.population_size < 2:
@@ -121,3 +122,5 @@ class GAConfig:
             raise ValueError("early_stopping_patience must be >= 1 or None")
         if self.max_attempts < 1:
             raise ValueError("max_attempts must be >= 1")
+        if self.max_evaluations is not None and self.max_evaluations < self.population_size:
+            raise ValueError("max_evaluations must be >= population_size or None")

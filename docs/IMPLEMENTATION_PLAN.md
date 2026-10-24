@@ -20,7 +20,7 @@ comparison with random search.
 | 2 | 50x50 disaster grid, layers, bases, preview plot | done |
 | 3 | Chromosome, population init, fitness, hard constraints | done |
 | 4 | GA operators and evolution loop, convergence plot, route maps, coverage heatmaps | done |
-| 5 | Sensitivity experiments, random-search comparison, report material | planned |
+| 5 | Sensitivity experiments, random-search comparison, technical report | done |
 
 ## 3. Architecture (src/uav_ga)
 
@@ -36,7 +36,9 @@ comparison with random search.
 | genetic_algorithm.py | `GeneticAlgorithm`, `GAResult` | done |
 | visualization.py | `plot_grid`, `plot_convergence`, `plot_routes`, `plot_route_snapshots`, `plot_coverage` | done |
 | run_ga.py | runnable Step 4 simulation, saves figures and `ga_run_summary.json` | done |
-| random_search.py, experiments.py | baseline and experiments | planned |
+| random_search.py | `RandomSearch` baseline (same sampler, evaluator, constraints) | done |
+| experiments.py, run_experiments.py | experiment framework, statistics, CLI, figures | done |
+| reports/ | `report_template.md` + `build_report.py` produce `technical_report.md/.pdf` from saved results | done |
 
 ## 4. Disaster grid (Step 2)
 
@@ -282,17 +284,39 @@ dashed return legs, status from route-level validation), `route_snapshots.png`
 fitness model on a fixed 0-1 colour scale, union over drones, targets marked
 detected/missed). The middle generation is `generations_run // 2`.
 
-## 11. Experiments (planned)
+## 11. Experiments (Step 5)
 
-Sensitivity to population size, mutation/crossover rate, tournament size,
-elitism over several seeds. GA vs random search with the same evaluator,
-evaluation budget, seeds and scenario.
+Environment fixed at grid seed 42. One-factor-at-a-time sensitivity (others at
+default 30 / 0.15 per gene / 3): population {20, 30, 50}, mutation probability
+{0.05, 0.15, 0.30} (per gene), tournament size {2, 3, 5}. Each of the 7 distinct
+GA configurations and the random-search baseline is run with 10 optimiser seeds
+(11, 22, ..., 99, 110). Every run has exactly 1710 fitness evaluations
+(`GAConfig.max_evaluations`; the default 60-generation run uses 30 + 60 x 28
+= 1710). When the budget ends mid-generation the missing slots are filled with
+already-evaluated parents, so the count is exact and the number of generations
+varies with population size. Only fitness evaluations count; feasibility checks
+(inside the regeneration guard and the candidate sampler) are not counted, for
+both methods.
 
-## 12. Report deliverables (planned)
+Random search draws independent chromosomes with the same sampler used for the
+GA's initial population, evaluates them with the identical `FitnessEvaluator`
+and keeps the best (feasible first). With the same seed its first 30 draws equal
+the GA's initial population; it then keeps drawing until the budget is spent.
 
-Problem, encoding, operators, fitness and constraints (Sections 5-8 are written
-to be reusable), parameters, plots, sensitivity, random-search comparison,
-limitations.
+Statistics: mean and sample SD (ddof = 1) over seeds; paired same-seed
+differences; exact two-sided paired sign-flip permutation test (smallest
+attainable p with 10 seeds is 2/1024 = 0.002); six level-vs-default
+comparisons give a Bonferroni threshold of 0.0083. Outputs in
+`outputs/experiments/`: `raw_runs.csv` (every run), `progress_curves.json`,
+`summary_sensitivity.csv`, `summary_comparison.csv`, `experiment_config.json` and
+six figures. `--replot` recreates summaries and figures from the saved CSV.
+
+## 12. Technical report (Step 5)
+
+`reports/report_template.md` holds the text with fill-in tokens;
+`reports/build_report.py` computes every number from `outputs/ga_run_summary.json`
+and `outputs/experiments/`, writes `reports/technical_report.md`, renders the PDF
+(markdown + headless Chrome) and fails if the page count is outside 3-5.
 
 ## 13. Assumptions and limitations (for the report)
 
@@ -306,4 +330,6 @@ limitations.
 - Drones are assumed not to collide with each other.
 - Total fleet time (sum) is used, not makespan.
 - All weights and normalisation references are design choices.
+- Experiments use one environment (seed 42) and 10 seeds; p-values are indicative.
+- Random search shares the GA's feasibility-aware candidate sampler.
 - The weighted sum is one scalarisation; no Pareto front is computed.

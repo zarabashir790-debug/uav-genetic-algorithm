@@ -14,7 +14,8 @@
     "waypoint_sigma": 3.0,
     "waypoint_replace_prob": 0.1,
     "speed_sigma_fraction": 0.15,
-    "max_attempts": 10
+    "max_attempts": 10,
+    "max_evaluations": null
   },
   "uav_config": {
     "n_waypoints": 5,
@@ -51,6 +52,25 @@
   "initial_best_fitness": 0.746826791538087,
   "final_best_fitness": 0.8586816416791417,
   "final_feasible": true,
+  "initial_evaluation": {
+    "fitness": 0.746826791538087,
+    "raw_score": 0.746826791538087,
+    "feasible": true,
+    "penalty": 0.0,
+    "coverage": 0.7468185045605987,
+    "detection_rate": 0.6666666666666666,
+    "detected_targets": 10,
+    "energy": 243.81100152515498,
+    "flight_time": 124.42084863456363,
+    "hazard_exposure": 11.10627115525711,
+    "energy_norm": 0.28737741811074374,
+    "time_norm": 0.29624011579658005,
+    "hazard_norm": 0.10577401100244867,
+    "obstacle_cells": 0,
+    "no_fly_cells": 0,
+    "out_of_bounds_cells": 0,
+    "range_excess": 0.0
+  },
   "final_evaluation": {
     "fitness": 0.8586816416791417,
     "raw_score": 0.8586816416791417,

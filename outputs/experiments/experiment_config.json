@@ -1,0 +1,54 @@
+{
+  "env_seed": 42,
+  "seeds": [
+    11,
+    22,
+    33,
+    44,
+    55,
+    66,
+    77,
+    88,
+    99,
+    110
+  ],
+  "budget": 1710,
+  "defaults": {
+    "population_size": 30,
+    "mutation_prob": 0.15,
+    "tournament_size": 3
+  },
+  "levels": {
+    "population_size": [
+      20,
+      30,
+      50
+    ],
+    "mutation_prob": [
+      0.05,
+      0.15,
+      0.3
+    ],
+    "tournament_size": [
+      2,
+      3,
+      5
+    ]
+  },
+  "mutation_definition": "per-gene probability",
+  "std": "sample SD (ddof=1)",
+  "p_value": "exact two-sided paired sign-flip permutation test on the mean difference",
+  "files": {
+    "raw_runs": "outputs/experiments/raw_runs.csv",
+    "progress_curves": "outputs/experiments/progress_curves.json",
+    "sensitivity_summary": "outputs/experiments/summary_sensitivity.csv",
+    "comparison_summary": "outputs/experiments/summary_comparison.csv",
+    "experiment_config": "outputs/experiments/experiment_config.json",
+    "population_size": "outputs/experiments/sensitivity_population_size.png",
+    "mutation_prob": "outputs/experiments/sensitivity_mutation_rate.png",
+    "tournament_size": "outputs/experiments/sensitivity_tournament_size.png",
+    "progress": "outputs/experiments/ga_vs_random_progress.png",
+    "comparison": "outputs/experiments/ga_vs_random_comparison.png",
+    "sensitivity_overview": "outputs/experiments/sensitivity_overview.png"
+  }
+}
