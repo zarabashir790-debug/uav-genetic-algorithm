@@ -9,11 +9,13 @@ respecting maximum flight range and no-fly zones.
 ## Status
 
 - **Step 1 (setup):** done.
-- **Step 2 (disaster grid):** done. `DisasterGrid`, its plot and a demo.
-- **Planned, not implemented:** chromosome, fitness function, operators, GA,
-  random-search baseline, route/heatmap/convergence plots, experiments.
+- **Step 2 (disaster grid):** done.
+- **Step 3 (chromosome, population, fitness, constraints):** done.
+- **Planned, not implemented:** selection/crossover/mutation, the GA loop,
+  convergence/route/heatmap plots, random-search baseline, experiments.
 
-See [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md).
+See [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) for the design,
+formulas and assumptions.
 
 ## Setup (Linux/macOS)
 
@@ -48,27 +50,65 @@ indexed `layer[y, x]`: `obstacles`, `no_fly`, `hazards` (0-1, traversable),
 `priority` (0-1), `targets`. Obstacles and no-fly cells are blocked; hazards are
 flyable but carry risk. Three drone bases sit along the bottom edge.
 
+## Run the Step 3 demo
+
+```bash
+python -m uav_ga.demo_step3
+```
+
+Loads the seed-42 grid, generates 30 chromosomes, prints one, evaluates all,
+prints best/average/worst fitness and the best chromosome's breakdown and
+feasibility. No evolution happens here.
+
+## Step 3 summary
+
+- **Chromosome:** 3 `DronePlan`s (one per base). Each has 5 integer (x, y)
+  waypoints, 6 float segment speeds and 6 sensor modes (OFF/LOW/HIGH).
+  Route: `base -> wp1..wp5 -> base` (drones **return to base**).
+  Deployment position = first waypoint.
+- **Population:** `PopulationGenerator`, default 30, seeded and reproducible,
+  waypoints on flyable cells, no duplicates.
+- **Fitness:** weighted sum of normalised coverage, detection, energy, time and
+  hazard (`raw` in [0, 1]); defaults 0.30/0.25/0.15/0.10/0.20 (design choices).
+- **Constraints:** every flight segment is traversed cell by cell. Routes through
+  obstacles, no-fly cells or out of bounds, or longer than the range limit, are
+  infeasible and score below -1, always below any feasible plan.
+
+Use in code:
+
+```python
+from uav_ga.config import GridConfig
+from uav_ga.grid import DisasterGrid
+from uav_ga.population import PopulationGenerator
+from uav_ga.fitness import FitnessEvaluator
+
+grid = DisasterGrid(GridConfig(seed=42))
+population = PopulationGenerator(grid).generate()
+breakdown = FitnessEvaluator(grid).evaluate(population[0])
+print(breakdown.fitness, breakdown.feasible)
+```
+
 ## Layout
 
 ```
 uav-genetic-algorithm/
-├── README.md
-├── requirements.txt
-├── pyproject.toml
-├── .gitignore
+├── README.md  requirements.txt  pyproject.toml  .gitignore
 ├── docs/IMPLEMENTATION_PLAN.md
 ├── src/uav_ga/
-│   ├── config.py             # GridConfig (GA/UAV/fitness config planned)
-│   ├── grid.py               # DisasterGrid (done)
-│   ├── chromosome.py         # encoding (planned)
-│   ├── fitness.py            # objectives + constraints (planned)
-│   ├── operators.py          # selection/crossover/mutation/repair (planned)
-│   ├── genetic_algorithm.py  # GA loop (planned)
-│   ├── random_search.py      # baseline (planned)
+│   ├── config.py             # Grid/UAV/Sensor/Fitness/Population configs
+│   ├── grid.py               # DisasterGrid + exact segment traversal
+│   ├── chromosome.py         # SensorMode, DronePlan, Chromosome
+│   ├── population.py         # PopulationGenerator
+│   ├── constraints.py        # ConstraintChecker (segment-level)
+│   ├── fitness.py            # FitnessEvaluator, FitnessBreakdown
 │   ├── visualization.py      # plot_grid done; other plots planned
 │   ├── demo_grid.py          # Step 2 demo
-│   └── experiments.py        # sensitivity + comparison (planned)
-├── tests/                    # test_package.py, test_grid.py
-├── outputs/                  # generated figures/results (git-ignored)
-└── reports/                  # report material
+│   ├── demo_step3.py         # Step 3 demo
+│   ├── operators.py          # planned (Step 4)
+│   ├── genetic_algorithm.py  # planned (Step 4)
+│   ├── random_search.py      # planned (Step 5)
+│   └── experiments.py        # planned (Step 5)
+├── tests/                    # grid, chromosome, population, constraints, fitness
+├── outputs/                  # generated figures (git-ignored except grid_preview.png)
+└── reports/
 ```

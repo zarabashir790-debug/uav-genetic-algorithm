@@ -16,6 +16,7 @@ priority  : float, coverage importance weight in [0, 1]
 targets   : bool,  True = a simulated target to be detected later
 """
 
+import math
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
@@ -95,6 +96,44 @@ class DisasterGrid:
             "priority": float(self.priority[y, x]),
             "target": bool(self.targets[y, x]),
         }
+
+    def segment_cells(self, p0: Cell, p1: Cell) -> List[Tuple[int, int, float]]:
+        """Exact grid traversal of the straight segment p0 -> p1.
+
+        Cell (x, y) is the square [x-0.5, x+0.5) x [y-0.5, y+0.5) centred on
+        the integer coordinate. Returns ``(x, y, length)`` for every cell the
+        segment passes through, in travel order, where ``length`` is the
+        distance flown inside that cell. Cells outside the grid are returned
+        too (not clipped) so callers can detect out-of-bounds routes.
+        A segment that only touches a cell corner does not enter that cell.
+        """
+        x0, y0 = float(p0[0]), float(p0[1])
+        x1, y1 = float(p1[0]), float(p1[1])
+        dx, dy = x1 - x0, y1 - y0
+        total = math.hypot(dx, dy)
+        if total == 0.0:
+            return [(math.floor(x0 + 0.5), math.floor(y0 + 0.5), 0.0)]
+
+        ts = [0.0, 1.0]
+        for start, delta, lo, hi in ((x0, dx, min(x0, x1), max(x0, x1)),
+                                     (y0, dy, min(y0, y1), max(y0, y1))):
+            if delta == 0.0:
+                continue
+            n = math.floor(lo - 0.5) + 1  # first cell boundary strictly above lo
+            while n + 0.5 < hi:
+                ts.append((n + 0.5 - start) / delta)
+                n += 1
+        ts.sort()
+
+        cells: List[Tuple[int, int, float]] = []
+        for t_a, t_b in zip(ts, ts[1:]):
+            if t_b - t_a < 1e-9:
+                continue
+            tm = 0.5 * (t_a + t_b)
+            cx = math.floor(x0 + tm * dx + 0.5)
+            cy = math.floor(y0 + tm * dy + 0.5)
+            cells.append((cx, cy, (t_b - t_a) * total))
+        return cells
 
     @property
     def flyable_mask(self) -> np.ndarray:

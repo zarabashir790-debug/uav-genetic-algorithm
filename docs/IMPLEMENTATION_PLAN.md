@@ -1,105 +1,211 @@
 # Implementation Plan
 
-Everything below is a **plan**; nothing except the empty package skeleton is
-implemented yet. Details may be refined as each step is built.
+Status legend: **[done]** implemented and tested, **[planned]** not implemented yet.
 
 ## 1. Assignment objectives
 
-Build an object-oriented Python system that uses a GA to optimise, over a
-simulated disaster grid:
+Object-oriented Python system using a GA to optimise, over a simulated disaster
+grid: UAV deployment positions, waypoint trajectories, speed adjustments and
+sensor activation profiles. Maximise high-priority coverage and target
+detection; minimise energy, flight time and hazard exposure; respect maximum
+flight range and no-fly zones. Produce convergence plots, route maps and
+coverage heatmaps; later run hyperparameter sensitivity experiments and a fair
+comparison with random search.
 
-- UAV deployment (start) positions
-- waypoint trajectories
-- speed adjustments
-- sensor activation profiles
+## 2. Roadmap
 
-Maximise high-priority area coverage and target detection; minimise energy
-consumption, flight time and hazard exposure. Respect maximum flight range and
-no-fly zones. Use custom chromosome encoding and genetic operators. Produce
-fitness convergence plots, UAV route maps and coverage heatmaps. Later:
-hyperparameter sensitivity experiments and a fair comparison with random search.
+| Step | Content | Status |
+|---|---|---|
+| 1 | Project setup | done |
+| 2 | 50x50 disaster grid, layers, bases, preview plot | done |
+| 3 | Chromosome, population init, fitness, hard constraints | done |
+| 4 | GA operators and evolution loop, convergence plot, route map, heatmap | planned |
+| 5 | Sensitivity experiments, random-search comparison, report material | planned |
 
-## 2. Architecture (src/uav_ga)
+## 3. Architecture (src/uav_ga)
 
-| Module | Planned responsibility |
-|---|---|
-| config.py | Dataclasses: grid size, UAV count/limits, fitness weights, GA hyperparameters, seed |
-| grid.py | `DisasterGrid`: priority map, target locations, hazard map, no-fly mask; cell/coordinate helpers |
-| chromosome.py | `Chromosome`: encoding, random initialisation, decoding into per-UAV plans |
-| fitness.py | `FitnessEvaluator`: simulates a plan, returns objective values, penalties, scalar fitness |
-| operators.py | Selection, crossover, mutation, repair (all custom, gene-aware) |
-| genetic_algorithm.py | `GeneticAlgorithm`: population loop, elitism, history recording |
-| random_search.py | `RandomSearch`: baseline using the same evaluator and budget |
-| visualization.py | Convergence, route map, coverage heatmap plotting |
-| experiments.py | Sensitivity sweeps and GA vs random-search runs over multiple seeds |
+| Module | Responsibility | Status |
+|---|---|---|
+| config.py | `GridConfig`, `UAVConfig`, `SensorSpec`, `FitnessConfig`, `PopulationConfig` (GA hyperparameters come in Step 4) | done |
+| grid.py | `DisasterGrid` (layers, queries) and exact `segment_cells` traversal | done |
+| chromosome.py | `SensorMode`, `DronePlan`, `Chromosome` | done |
+| population.py | `PopulationGenerator` | done |
+| constraints.py | `ConstraintChecker`, `DroneConstraintReport` | done |
+| fitness.py | `FitnessEvaluator`, `FitnessBreakdown`, `DroneMetrics` | done |
+| visualization.py | `plot_grid` done; convergence, route map, heatmap planned | partial |
+| operators.py, genetic_algorithm.py | selection, crossover, mutation, GA loop | planned |
+| random_search.py, experiments.py | baseline and experiments | planned |
 
-## 3. Chromosome representation
+## 4. Disaster grid (Step 2)
 
-Per UAV, a block of genes:
+50x50, coordinate `(x, y)` = (column, row), layers indexed `layer[y, x]`.
+Separate arrays: `obstacles` (blocked), `no_fly` (restricted), `hazards`
+(0-1, traversable but risky), `priority` (0-1 coverage weight), `targets`.
+Obstacles and no-fly zones are blocked; hazards are not. Bases are fixed at
+(12,1), (25,1), (38,1) with a keep-out so they are always valid. Seed 42 gives a
+reproducible scenario.
 
-- deployment position `(x, y)` on the grid
-- `W` waypoints, each `(x, y)` (ordered)
-- a speed level per leg (continuous within `[v_min, v_max]` or a discrete level)
-- a sensor on/off flag (or activation level) per waypoint
+## 5. Chromosome encoding (Step 3)
 
-The chromosome is the concatenation of all UAV blocks, stored as NumPy arrays
-(one per gene type) so operators can treat each gene group appropriately.
+One `Chromosome` = three `DronePlan`s (drone *i* uses base *i*). Hybrid encoding
+per drone (`n = 5` waypoints):
 
-## 4. GA workflow
+| Gene | Type | Size | Meaning |
+|---|---|---|---|
+| waypoints | int (x, y) | 5 x 2 | ordered operational waypoints |
+| speeds | float | 6 | speed of each flight segment, in `[speed_min, speed_max]` |
+| sensors | int enum | 6 | OFF / LOW / HIGH for each segment |
+| base | fixed | 1 | grid base, never mutated |
 
-1. Initialise a random population (seeded RNG).
-2. Decode and evaluate each individual.
-3. Select parents (tournament).
-4. Crossover (UAV-block and waypoint-segment aware).
-5. Mutate (Gaussian position jitter, speed perturbation, sensor bit flip, waypoint swap).
-6. Repair constraint violations where cheap.
-7. Elitism, form next generation, record best/mean fitness.
-8. Stop at max generations (optionally on stagnation).
+**Route model (applied consistently to distance, time, energy, sensing and
+constraints):** the drone flies `base -> wp1 -> ... -> wp5 -> base`, i.e.
+**it returns to its base**, giving 6 segments. Waypoint order defines the route.
+Speed and sensor genes belong to segments, so the return leg has its own speed
+and sensor mode. The *deployment position* is derived as `wp1`, where the
+mission starts. Straight-line flight between waypoints is assumed.
 
-## 5. Fitness objectives
+## 6. Population initialisation (Step 3)
 
-Maximise: weighted priority-area coverage; target detection (targets inside an
-active sensor footprint).
-Minimise: energy (function of distance and speed); flight time; hazard exposure
-(hazard accumulated along the route).
+`PopulationGenerator` (default size 30, seeded `numpy` RNG, same seed gives the
+same population): three drones per chromosome, waypoints sampled uniformly from
+flyable cells, speeds uniform in bounds, sensor modes uniform over OFF/LOW/HIGH.
+Waypoints are chosen so each segment from the previous point is unblocked, and a
+whole drone plan is re-drawn (up to 200 tries) until its closed loop is feasible
+(including range). Duplicates are rejected; `diversity()` reports the mean
+pairwise waypoint distance. If the retries fail the last draw is kept, so
+feasibility is **not guaranteed** and the fitness function penalises such
+individuals. Validation: `Chromosome.validate(grid, uav)` checks structure,
+bases, speed/sensor ranges and waypoint cells (waypoints only; it does not
+prove routes are safe).
 
-Initial approach: weighted-sum scalarisation with normalised terms. Whether to
-also report a Pareto view is an open decision for a later step.
+## 7. Fitness function (Step 3)
 
-## 6. Constraint handling
+All quantities use abstract units: distance in cells, time in tu, speed in
+cells/tu, energy in eu, power in eu/tu. These are design assumptions, not
+calibrated to a real aircraft.
 
-- **Maximum flight range:** route length over the limit is penalised in
-  proportion to the excess; repair may truncate trailing waypoints.
-- **No-fly zones:** waypoints or segments entering a zone are penalised;
-  repair may move a waypoint to the nearest allowed cell.
-- Penalties are scaled so infeasible solutions rank below feasible ones.
+### Sensor model
 
-## 7. Visualisations
+| Mode | Footprint radius | Coverage effectiveness | Power |
+|---|---|---|---|
+| OFF | none | 0 | 0 |
+| LOW | 2 cells | 0.5 | 0.3 eu/tu |
+| HIGH | 4 cells | 1.0 | 1.0 eu/tu |
 
-- Fitness convergence (best and mean per generation, multiple runs)
-- UAV route map over the grid with no-fly zones, hazards, targets
-- Coverage heatmap (visit/sensing frequency per cell)
+While a segment's sensor is on, a disc footprint is placed on every grid cell
+that segment traverses (exact traversal). Cell coverage = **maximum**
+effectiveness over all footprints of all drones, so cells are never counted
+twice. A target is *detected* if its cell has coverage > 0. This is a simulated
+geometric proxy, **not** computer-vision recognition. The sensor runs for the
+whole segment, including the return leg. Sensing is not blocked by obstacles.
 
-## 8. Experiments
+### Physical models
 
-- Hyperparameter sensitivity: population size, mutation rate, crossover rate,
-  tournament size, elitism; several seeds each, report mean and spread.
-- GA vs random search: same evaluator, same number of fitness evaluations,
-  same seeds, same scenarios.
+For segment *i* with length `L_i`, speed `v_i`, sensor mode `m_i`:
 
-## 9. Report deliverables
+```
+t_i = L_i / v_i
+P_i = P_hover + k_drag * v_i^3 + P_sensor(m_i)
+e_i = P_i * t_i
+```
+Defaults: `P_hover = 1.0`, `k_drag = 0.02`. Slow flight wastes hover energy and
+fast flight pays cubic drag, so energy per cell is U-shaped with a minimum near
+`v = 2.9`, while time always prefers speed: a real speed trade-off for the GA.
+Totals are summed over all segments and drones (including return legs). Flight
+time is the **sum** of drone flight times (fleet flight time), not the mission
+duration. Hazard exposure = sum over traversed cells of
+`(length flown inside the cell) * hazard intensity`, measured along segments,
+not only at waypoints.
 
-Problem description, encoding and operator design, fitness/constraint
-definitions, parameter settings, convergence plots, route maps and heatmaps,
-sensitivity results, random-search comparison, discussion and limitations.
+### Objectives and normalisation
 
-## 10. Step roadmap
+```
+C = sum(priority * coverage) / sum(priority)        in [0, 1]
+D = detected targets / total targets                in [0, 1]
+E = min(1, total energy / E_ref)
+T = min(1, total flight time / T_ref)
+H = min(1, total hazard exposure / H_ref)
+E_ref = n_drones * max_range * max_v[(P_hover + k v^3 + P_high) / v]   (v = speed_min or speed_max)
+T_ref = n_drones * max_range / speed_min
+H_ref = 0.25 * n_drones * max_range * 1.0
+```
+The references are "worst-case-ish" scales chosen so normalised values spread
+over a useful part of [0, 1]; `H_ref` is deliberately smaller than the worst case
+because hazards cover only ~14% of the grid.
 
-1. Project setup (this step)
-2. Grid simulation and config
-3. Chromosome
-4. Fitness and constraints
-5. Operators and GA
-6. Visualisation
-7. Random search and experiments
-8. Report
+### Scalar fitness (maximised)
+
+```
+raw = wC*C + wD*D + wE*(1-E) + wT*(1-T) + wH*(1-H),   sum(w) = 1,   raw in [0, 1]
+fitness = raw                                          if feasible
+fitness = -(1.0 + 0.05*blocked_cells + 1.0*sum(range_excess/max_range))   if infeasible
+```
+
+### Default weights and rationale (design choices, not prescribed)
+
+| Weight | Value | Reason |
+|---|---|---|
+| coverage `wC` | 0.30 | primary mission goal |
+| detection `wD` | 0.25 | second mission goal; targets are few, so each matters |
+| hazard `wH` | 0.20 | safety: strongest of the cost terms |
+| energy `wE` | 0.15 | battery limits endurance |
+| time `wT` | 0.10 | lowest: range limits already bound time |
+
+Mission benefit totals 0.55 against 0.45 for costs so that sensing is worth its
+energy but the GA cannot win by not flying. Weights are in `FitnessConfig` for
+sensitivity studies in Step 5. Because of the `1 - cost` form, a plan that
+does nothing useful still scores about 0.4-0.45; this is a known property of
+weighted-sum scalarisation.
+
+## 8. Hard-constraint handling (Step 3)
+
+Constraints: (1) max range per drone (full loop including return, default 140
+cells), (2) obstacles, (3) no-fly zones, (4) out-of-bounds.
+
+**Segment checking:** `DisasterGrid.segment_cells` computes the exact cells each
+segment passes through (parametric crossings of cell boundaries), so a route
+that jumps over a blocked region with free endpoints is still detected. It also
+reports out-of-bounds cells. Assumption: a segment that only touches a cell
+corner does not enter that cell.
+
+**Penalty approach (no repair):** any violation makes the plan infeasible
+(`FitnessBreakdown.feasible = False`). Since `raw <= 1 <= infeasible_base`,
+every infeasible plan scores `< -1`, below every feasible plan (`>= 0`),
+regardless of coverage. More blocked cells or range excess give a lower score, so
+the GA keeps a gradient toward feasibility. `FitnessConfig` rejects
+`infeasible_base < 1`. No repair operator exists, so no unverified "safe" route
+is ever invented. Hazard cells never cause infeasibility.
+
+## 9. GA workflow (Step 4, planned)
+
+Tournament selection, block-aware crossover (per-drone, per-segment), mutation
+(waypoint jitter, speed perturbation, sensor change, waypoint swap), elitism,
+generation history, optional stagnation stop. Fitness is the scalar defined above.
+
+## 10. Visualisations (planned)
+
+Convergence curves, UAV route map over the grid, coverage heatmap.
+(`plot_grid` and `FitnessEvaluator.coverage_map` already exist as building blocks.)
+
+## 11. Experiments (planned)
+
+Sensitivity to population size, mutation/crossover rate, tournament size,
+elitism over several seeds. GA vs random search with the same evaluator,
+evaluation budget, seeds and scenario.
+
+## 12. Report deliverables (planned)
+
+Problem, encoding, operators, fitness and constraints (Sections 5-8 are written
+to be reusable), parameters, plots, sensitivity, random-search comparison,
+limitations.
+
+## 13. Assumptions and limitations (for the report)
+
+- Abstract units; physics (hover + cubic drag) is a simplified model.
+- Straight-line segments; no turning-rate or altitude model.
+- Detection is a geometric proxy; sensing ignores obstacles/occlusion.
+- Footprints are centred on traversed cell centres (error under one cell).
+- Drones are assumed not to collide with each other.
+- Total fleet time (sum) is used, not makespan.
+- All weights and normalisation references are design choices.
+- The weighted sum is one scalarisation; no Pareto front is computed.
