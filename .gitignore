@@ -25,3 +25,4 @@ htmlcov/
 # Generated results (folders kept via .gitkeep)
 outputs/*
 !outputs/.gitkeep
+!outputs/grid_preview.png
