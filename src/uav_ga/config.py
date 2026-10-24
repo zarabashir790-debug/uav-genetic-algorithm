@@ -1,10 +1,10 @@
 """Configuration dataclasses.
 
-Implemented: GridConfig (Step 2).
-Planned, not implemented: UAV limits, fitness weights, GA hyperparameters.
+Implemented: GridConfig, UAVConfig, SensorSpec, FitnessConfig, PopulationConfig, GAConfig.
 """
 
 from dataclasses import dataclass
+from typing import Optional
 
 
 @dataclass(frozen=True)
@@ -79,3 +79,45 @@ class PopulationConfig:
     size: int = 30
     seed: int = 42
     max_tries: int = 200  # attempts per drone to draw a route-feasible plan
+
+
+CROSSOVER_METHODS = ("drone", "waypoint", "mixed")
+
+
+@dataclass(frozen=True)
+class GAConfig:
+    """Genetic Algorithm hyperparameters (experimental defaults, not prescribed by the instructor)."""
+
+    population_size: int = 30
+    max_generations: int = 60
+    crossover_prob: float = 0.8       # per parent pair
+    mutation_prob: float = 0.15       # per GENE: each waypoint/speed/sensor gene mutates independently
+    tournament_size: int = 3
+    elite_count: int = 2
+    seed: int = 42
+    crossover_method: str = "mixed"   # "drone", "waypoint" or "mixed" (random choice per pair)
+    early_stopping_patience: Optional[int] = None  # stop after this many generations w/o improvement
+    min_improvement: float = 1e-6     # smallest best-so-far gain that counts as improvement
+    waypoint_sigma: float = 3.0       # std-dev (cells) of the spatial waypoint mutation
+    waypoint_replace_prob: float = 0.1  # chance a mutated waypoint is replaced by a random flyable cell
+    speed_sigma_fraction: float = 0.15  # speed mutation std-dev as a fraction of (speed_max - speed_min)
+    max_attempts: int = 10            # bounded regeneration attempts per crossover/mutation
+
+    def __post_init__(self):
+        if self.population_size < 2:
+            raise ValueError("population_size must be >= 2")
+        if self.max_generations < 0:
+            raise ValueError("max_generations must be >= 0")
+        if not 0 <= self.elite_count < self.population_size:
+            raise ValueError("elite_count must be in [0, population_size)")
+        if self.tournament_size < 1:
+            raise ValueError("tournament_size must be >= 1")
+        for name in ("crossover_prob", "mutation_prob", "waypoint_replace_prob"):
+            if not 0.0 <= getattr(self, name) <= 1.0:
+                raise ValueError(f"{name} must be in [0, 1]")
+        if self.crossover_method not in CROSSOVER_METHODS:
+            raise ValueError(f"crossover_method must be one of {CROSSOVER_METHODS}")
+        if self.early_stopping_patience is not None and self.early_stopping_patience < 1:
+            raise ValueError("early_stopping_patience must be >= 1 or None")
+        if self.max_attempts < 1:
+            raise ValueError("max_attempts must be >= 1")

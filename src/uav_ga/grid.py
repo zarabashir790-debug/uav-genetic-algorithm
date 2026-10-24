@@ -98,14 +98,20 @@ class DisasterGrid:
         }
 
     def segment_cells(self, p0: Cell, p1: Cell) -> List[Tuple[int, int, float]]:
-        """Exact grid traversal of the straight segment p0 -> p1.
+        """Exact grid traversal of the straight segment p0 -> p1 (conservative).
 
         Cell (x, y) is the square [x-0.5, x+0.5) x [y-0.5, y+0.5) centred on
         the integer coordinate. Returns ``(x, y, length)`` for every cell the
         segment passes through, in travel order, where ``length`` is the
         distance flown inside that cell. Cells outside the grid are returned
         too (not clipped) so callers can detect out-of-bounds routes.
-        A segment that only touches a cell corner does not enter that cell.
+
+        Conservative corner policy: if the segment passes exactly through a
+        shared corner of four cells, all four cells count as touched. The two
+        cells it only grazes are reported with ``length == 0.0``. So a route can
+        never slip diagonally between two touching blocked cells, and grazing
+        the corner of a single blocked cell is also a collision. Zero-length
+        entries carry no flight distance, hazard or sensing.
         """
         x0, y0 = float(p0[0]), float(p0[1])
         x1, y1 = float(p1[0]), float(p1[1])
@@ -114,16 +120,17 @@ class DisasterGrid:
         if total == 0.0:
             return [(math.floor(x0 + 0.5), math.floor(y0 + 0.5), 0.0)]
 
-        ts = [0.0, 1.0]
-        for start, delta, lo, hi in ((x0, dx, min(x0, x1), max(x0, x1)),
-                                     (y0, dy, min(y0, y1), max(y0, y1))):
+        crossings = ([], [])  # parametric t of x-boundary and y-boundary crossings
+        for axis, (start, delta, lo, hi) in enumerate(((x0, dx, min(x0, x1), max(x0, x1)),
+                                                       (y0, dy, min(y0, y1), max(y0, y1)))):
             if delta == 0.0:
                 continue
             n = math.floor(lo - 0.5) + 1  # first cell boundary strictly above lo
             while n + 0.5 < hi:
-                ts.append((n + 0.5 - start) / delta)
+                crossings[axis].append((n + 0.5 - start) / delta)
                 n += 1
-        ts.sort()
+        ts = sorted([0.0, 1.0] + crossings[0] + crossings[1])
+        corner_ts = [t for t in crossings[0] if any(abs(t - u) < 1e-9 for u in crossings[1])]
 
         cells: List[Tuple[int, int, float]] = []
         for t_a, t_b in zip(ts, ts[1:]):
@@ -133,6 +140,11 @@ class DisasterGrid:
             cx = math.floor(x0 + tm * dx + 0.5)
             cy = math.floor(y0 + tm * dy + 0.5)
             cells.append((cx, cy, (t_b - t_a) * total))
+            if any(abs(t_b - t) < 1e-9 for t in corner_ts):
+                px, py = x0 + t_b * dx, y0 + t_b * dy  # the shared corner (half-integer coords)
+                for gx in (math.floor(px), math.floor(px) + 1):
+                    for gy in (math.floor(py), math.floor(py) + 1):
+                        cells.append((gx, gy, 0.0))
         return cells
 
     @property

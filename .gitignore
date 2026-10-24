@@ -26,3 +26,5 @@ htmlcov/
 outputs/*
 !outputs/.gitkeep
 !outputs/grid_preview.png
+!outputs/*.png
+!outputs/ga_run_summary.json

@@ -165,11 +165,10 @@ class FitnessEvaluator:
             hazard = 0.0
             for seg, mode in zip(seg_cells, plan.sensors):
                 for x, y, length in seg:
-                    if not grid.in_bounds(x, y):
-                        continue
-                    hazard += length * grid.hazards[y, x]
-                    if mode != SensorMode.OFF:
-                        centres[SensorMode(int(mode))].add((x, y))
+                    if grid.in_bounds(x, y):
+                        hazard += length * grid.hazards[y, x]
+                if mode != SensorMode.OFF:
+                    centres[SensorMode(int(mode))].update(self._sensed_cells(seg))
             drones.append(DroneMetrics(
                 distance=report.distance, flight_time=float(times.sum()),
                 energy=float((power * times).sum()), hazard_exposure=float(hazard),
@@ -218,8 +217,15 @@ class FitnessEvaluator:
             for seg, mode in zip(self.checker.route_cells(plan), plan.sensors):
                 if mode == SensorMode.OFF:
                     continue
-                centres[SensorMode(int(mode))].update((x, y) for x, y, _ in seg)
+                centres[SensorMode(int(mode))].update(self._sensed_cells(seg))
         return self._coverage_map(centres)
+
+    def _sensed_cells(self, seg):
+        """In-grid cells a segment senses from. Zero-length corner-touch cells (see
+        DisasterGrid.segment_cells) are skipped unless the whole segment is a point."""
+        moving = any(length > 0 for _, _, length in seg)
+        return [(x, y) for x, y, length in seg
+                if (length > 0 or not moving) and self.grid.in_bounds(x, y)]
 
     def _coverage_map(self, centres) -> np.ndarray:
         cov = np.zeros((self.grid.height, self.grid.width), dtype=float)

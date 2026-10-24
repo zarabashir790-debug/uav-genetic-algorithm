@@ -19,21 +19,23 @@ comparison with random search.
 | 1 | Project setup | done |
 | 2 | 50x50 disaster grid, layers, bases, preview plot | done |
 | 3 | Chromosome, population init, fitness, hard constraints | done |
-| 4 | GA operators and evolution loop, convergence plot, route map, heatmap | planned |
+| 4 | GA operators and evolution loop, convergence plot, route maps, coverage heatmaps | done |
 | 5 | Sensitivity experiments, random-search comparison, report material | planned |
 
 ## 3. Architecture (src/uav_ga)
 
 | Module | Responsibility | Status |
 |---|---|---|
-| config.py | `GridConfig`, `UAVConfig`, `SensorSpec`, `FitnessConfig`, `PopulationConfig` (GA hyperparameters come in Step 4) | done |
+| config.py | `GridConfig`, `UAVConfig`, `SensorSpec`, `FitnessConfig`, `PopulationConfig`, `GAConfig` | done |
 | grid.py | `DisasterGrid` (layers, queries) and exact `segment_cells` traversal | done |
 | chromosome.py | `SensorMode`, `DronePlan`, `Chromosome` | done |
 | population.py | `PopulationGenerator` | done |
 | constraints.py | `ConstraintChecker`, `DroneConstraintReport` | done |
 | fitness.py | `FitnessEvaluator`, `FitnessBreakdown`, `DroneMetrics` | done |
-| visualization.py | `plot_grid` done; convergence, route map, heatmap planned | partial |
-| operators.py, genetic_algorithm.py | selection, crossover, mutation, GA loop | planned |
+| operators.py | tournament selection, drone/waypoint crossover, `Mutator` | done |
+| genetic_algorithm.py | `GeneticAlgorithm`, `GAResult` | done |
+| visualization.py | `plot_grid`, `plot_convergence`, `plot_routes`, `plot_route_snapshots`, `plot_coverage` | done |
+| run_ga.py | runnable Step 4 simulation, saves figures and `ga_run_summary.json` | done |
 | random_search.py, experiments.py | baseline and experiments | planned |
 
 ## 4. Disaster grid (Step 2)
@@ -165,8 +167,18 @@ cells), (2) obstacles, (3) no-fly zones, (4) out-of-bounds.
 **Segment checking:** `DisasterGrid.segment_cells` computes the exact cells each
 segment passes through (parametric crossings of cell boundaries), so a route
 that jumps over a blocked region with free endpoints is still detected. It also
-reports out-of-bounds cells. Assumption: a segment that only touches a cell
-corner does not enter that cell.
+reports out-of-bounds cells.
+
+**Conservative corner policy (Step 4 fix):** Step 3 let a segment that touches
+only a cell corner pass, so a diagonal route could squeeze between two
+diagonally touching blocked cells. Now, if a segment passes exactly through a
+shared corner of four cells, **all four count as touched** (the two grazed cells
+are returned with length 0). Consequences: a route can never slip between
+touching blocked cells, and grazing the corner of even a single blocked cell is a
+collision. Zero-length cells add no distance, hazard or sensing. The effect on
+Step 3 results: the same seed-42 initial population now has average fitness
+0.6516 (was 0.6550) because the generator's segment check is stricter; the best
+(0.7468) is unchanged. Fitness weights and normalisation were not changed.
 
 **Penalty approach (no repair):** any violation makes the plan infeasible
 (`FitnessBreakdown.feasible = False`). Since `raw <= 1 <= infeasible_base`,
@@ -174,18 +186,101 @@ every infeasible plan scores `< -1`, below every feasible plan (`>= 0`),
 regardless of coverage. More blocked cells or range excess give a lower score, so
 the GA keeps a gradient toward feasibility. `FitnessConfig` rejects
 `infeasible_base < 1`. No repair operator exists, so no unverified "safe" route
-is ever invented. Hazard cells never cause infeasibility.
+is ever invented. Hazard cells never cause infeasibility. In Step 4 the GA adds a
+bounded regeneration guard around crossover and mutation (Section 9).
 
-## 9. GA workflow (Step 4, planned)
+## 9. Genetic Algorithm (Step 4)
 
-Tournament selection, block-aware crossover (per-drone, per-segment), mutation
-(waypoint jitter, speed perturbation, sensor change, waypoint swap), elitism,
-generation history, optional stagnation stop. Fitness is the scalar defined above.
+Fitness is the scalar from Section 7, maximised. Defaults are experimental
+choices, not instructor-prescribed values (`GAConfig`):
 
-## 10. Visualisations (planned)
+| Parameter | Default | Meaning |
+|---|---|---|
+| population_size | 30 | |
+| max_generations | 60 | |
+| crossover_prob | 0.8 | per selected parent pair |
+| mutation_prob | 0.15 | **per gene**: every waypoint, speed and sensor gene mutates independently |
+| tournament_size | 3 | selection pressure (to be studied in Step 5) |
+| elite_count | 2 | best chromosomes copied unchanged |
+| seed | 42 | seeds the initial population and every GA random choice |
+| crossover_method | "mixed" | "drone", "waypoint" or "mixed" (random choice per pair) |
+| early_stopping_patience | None | off by default; else stop after N generations without improvement |
+| min_improvement | 1e-6 | smallest best-so-far gain that counts as improvement |
+| waypoint_sigma / waypoint_replace_prob | 3.0 / 0.1 | spatial mutation step (cells) / chance of random replacement |
+| speed_sigma_fraction | 0.15 | speed mutation std-dev as a fraction of the speed range |
+| max_attempts | 10 | bounded regeneration attempts per crossover/mutation |
 
-Convergence curves, UAV route map over the grid, coverage heatmap.
-(`plot_grid` and `FitnessEvaluator.coverage_map` already exist as building blocks.)
+**Generation cycle:** evaluate; copy the elites; fill the rest by tournament
+selection of two parents, crossover (else copies), mutation, evaluation;
+generational replacement; record statistics; stop at `max_generations` or on
+early stopping. The stopping reason is reported.
+
+**Selection:** tournament of `tournament_size` random contestants (without
+replacement). Order key is `(feasible, fitness)`, so feasible always beats
+infeasible and negative fitness is handled. Selection never modifies parents.
+
+**Crossover** (suited to the structure: per-drone blocks, ordered waypoints with
+arrival-segment speed/sensor genes):
+- *Drone crossover:* swap k (1 to n-1) complete drone plans between parents.
+  Plan i always belongs to base i, so base assignment is preserved, and each
+  swapped route keeps its own speeds and sensors.
+- *Waypoint crossover:* for each chosen drone, swap one consecutive section of
+  waypoints `i..j` **together with the speeds and sensors of the segments
+  arriving at them**, so the three arrays stay aligned. The return leg and base
+  are never swapped.
+
+**Mutation** (each gene with probability `mutation_prob`): spatial waypoint
+move (rounded Gaussian step, retried up to 10 times to land on a flyable
+in-bounds cell) or, with `waypoint_replace_prob`, replacement by a random
+flyable cell; Gaussian speed change clipped to the bounds; sensor switch to one
+of the two other modes. Array sizes, bases and value ranges never change.
+
+**Constraint handling in reproduction:** a result is accepted only if
+`Chromosome.validate` passes and every route is feasible according to
+`ConstraintChecker` (all segments including return leg, range), or if the
+parent(s) were already infeasible. Otherwise the operator is retried (bounded by
+`max_attempts`); if all attempts fail, an unchanged copy of the parent is used
+and the fallback is counted (`GAResult.crossover_fallbacks/mutation_fallbacks`).
+Every individual is evaluated by `FitnessEvaluator`, which re-checks routes
+independently, so a failed regeneration can never be classified feasible, and
+infeasible chromosomes always rank below feasible ones.
+
+**Elitism and termination:** the best `elite_count` survive each generation, so
+the generation-best never drops. *Generation-best* is the best fitness inside one
+generation; *best-so-far* is the best over all generations up to that point and
+never decreases. Both are recorded, together with average, worst, feasible count
+and diversity.
+
+**Diversity measure:** mean pairwise distance between chromosomes, where the
+distance is the mean absolute difference of all waypoint coordinates (cells).
+Speeds and sensors are not included.
+
+**Convergence interpretation (seed 42, one run, default config):** best-so-far
+rose from 0.7468 (generation 0) to 0.8587 (generation 60); the population average
+rose from 0.6516 to 0.8377 and all 30 individuals were feasible in every logged
+generation. Most of the gain came early; late generations improve slowly (the
+curve is flattening, not flat). Diversity fell from 12.1 to about 1.5 cells, i.e.
+the population largely converged, so the search is probably partly exploitation by
+the end. This is a single seed, so no statistical claim is made; Step 5 will use
+multiple seeds.
+
+**Reproduce:**
+```bash
+python -m uav_ga.run_ga                      # seed 42, 60 generations, writes outputs/
+python -m uav_ga.run_ga --seed 7 --patience 15 --crossover drone
+```
+`outputs/ga_run_summary.json` records the configuration, seeds, history and
+figure paths.
+
+## 10. Visualisations (Step 4)
+
+All drawn from recorded data: `fitness_convergence.png` (generation best,
+average, best-so-far), `evolved_uav_routes.png` (best routes, numbered waypoints,
+dashed return legs, status from route-level validation), `route_snapshots.png`
+(best-so-far at generation 0, middle, final), `coverage_initial.png`,
+`coverage_middle.png`, `coverage_final.png` (actual sensor coverage from the
+fitness model on a fixed 0-1 colour scale, union over drones, targets marked
+detected/missed). The middle generation is `generations_run // 2`.
 
 ## 11. Experiments (planned)
 
@@ -205,6 +300,9 @@ limitations.
 - Straight-line segments; no turning-rate or altitude model.
 - Detection is a geometric proxy; sensing ignores obstacles/occlusion.
 - Footprints are centred on traversed cell centres (error under one cell).
+- Corner policy is conservative: touching a blocked cell's corner is a collision.
+- GA mutation is per gene, so its effective strength depends on chromosome size.
+- Diversity is measured on waypoints only.
 - Drones are assumed not to collide with each other.
 - Total fleet time (sum) is used, not makespan.
 - All weights and normalisation references are design choices.

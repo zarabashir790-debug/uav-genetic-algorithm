@@ -99,3 +99,75 @@ def test_range_exactly_at_limit_is_feasible():
     p = plan(g.bases[0], [(12, 11), (12, 1), (12, 11), (12, 1), (12, 11)])
     r = ConstraintChecker(g, UAV).check_drone(p)
     assert r.range_excess == 0.0 and r.feasible
+
+
+# --- Step 4: conservative corner policy (regression tests) -------------------------------
+def squeeze_grid():
+    g = blank_grid()
+    g.obstacles[4, 3] = True  # (x=3, y=4)
+    g.obstacles[3, 4] = True  # (x=4, y=3): diagonal pair touching at the corner (3.5, 3.5)
+    return g
+
+
+def test_corner_touch_cells_are_reported_with_zero_length():
+    g = blank_grid()
+    seg = g.segment_cells((3, 3), (4, 4))
+    assert {(x, y) for x, y, _ in seg} == {(3, 3), (4, 4), (3, 4), (4, 3)}
+    assert sum(l for _, _, l in seg) == pytest.approx(np.hypot(1, 1))  # no extra distance
+    assert sorted(l for _, _, l in seg if l == 0.0) == [0.0, 0.0, 0.0, 0.0]
+
+
+def test_diagonal_squeeze_between_touching_blocked_cells_is_infeasible():
+    g = squeeze_grid()
+    assert g.is_flyable(3, 3) and g.is_flyable(4, 4)  # both endpoints free
+    p = plan(g.bases[0], [(3, 3), (4, 4), (5, 5), (6, 6), (7, 7)])
+    r = ConstraintChecker(g, UAV).check_drone(p)
+    assert r.obstacle_cells == 2 and not r.feasible
+
+
+def test_grazing_a_single_blocked_corner_is_a_collision():
+    g = blank_grid()
+    g.obstacles[3, 4] = True  # only (x=4, y=3) is blocked; (3,3)->(4,4) merely touches its corner
+    p = plan(g.bases[0], [(3, 3), (4, 4), (5, 5), (6, 6), (7, 7)])
+    r = ConstraintChecker(g, UAV).check_drone(p)
+    assert r.obstacle_cells == 1 and not r.feasible
+    g.obstacles[3, 4] = False
+    assert ConstraintChecker(g, UAV).check_drone(p).feasible  # same route, nothing blocked
+
+
+def test_parallel_free_diagonal_is_still_feasible():
+    g = blank_grid()
+    g.obstacles[10, 3] = True  # unrelated blocked cell
+    p = plan(g.bases[0], [(3, 3), (4, 4), (5, 5), (6, 6), (7, 7)])
+    assert ConstraintChecker(g, UAV).check_drone(p).feasible
+
+
+def test_squeeze_makes_fitness_infeasible_and_negative():
+    from uav_ga.fitness import FitnessEvaluator
+    g = squeeze_grid()
+    wps = near_base_waypoints(g)
+    wps[0] = [(3, 3), (4, 4), (5, 5), (6, 6), (7, 7)]
+    b = FitnessEvaluator(g, UAV).evaluate(chromosome(g, wps, sensor=2))
+    assert not b.feasible and b.obstacle_cells == 2 and b.fitness < -1.0
+
+
+def test_sensing_ignores_zero_length_corner_cells():
+    from uav_ga.fitness import FitnessEvaluator
+    g = blank_grid()
+    ev = FitnessEvaluator(g, UAV)
+    seg = g.segment_cells((3, 3), (4, 4))
+    assert sorted(ev._sensed_cells(seg)) == [(3, 3), (4, 4)]
+    assert ev._sensed_cells(g.segment_cells((5, 5), (5, 5))) == [(5, 5)]  # point segment keeps its cell
+
+
+def test_return_leg_squeeze_detected():
+    g = blank_grid()
+    wps = [(14, 5), (14, 6), (14, 7), (14, 4), (14, 3)]  # last waypoint -> base (12,1) is diagonal
+    p = plan(g.bases[0], wps)
+    checker = ConstraintChecker(g, UAV)
+    assert checker.check_drone(p).feasible
+    g.obstacles[2, 14] = True  # (x=14, y=2)
+    g.obstacles[3, 13] = True  # (x=13, y=3): touching diagonal pair beside the return leg's path
+    r = checker.check_drone(p)
+    assert r.obstacle_cells == 2 and not r.feasible
+    assert not any(g.is_blocked(x, y) for x, y in wps)  # waypoints themselves are all free
